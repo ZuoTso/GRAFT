@@ -1,0 +1,1 @@
+python /content/GRAPE/train_mdi.py --seed 0 uci --data energy

@@ -1,0 +1,1 @@
+python /content/GRAPE/linear_regression_y.py --domain uci --data kin8nm --log_dir lry --method mean --seed 0

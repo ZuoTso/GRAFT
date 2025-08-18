@@ -1,0 +1,1 @@
+python /content/GRAPE/train_mdi.py uci --data concrete

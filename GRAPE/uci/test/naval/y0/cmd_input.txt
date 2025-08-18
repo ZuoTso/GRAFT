@@ -1,0 +1,1 @@
+python /content/GRAPE/train_y.py --seed 0 uci --data naval

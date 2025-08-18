@@ -1,0 +1,110 @@
+project-root/
+├─ README.md
+├─ LICENSE
+├─ pyproject.toml                    # 或 setup.cfg；統一套件管理
+├─ requirements.txt                  # pip 版本鎖定（Colab 友善）
+├─ environment.yml                   # conda 環境（本地/伺服器）
+├─ .gitignore
+│
+├─ configs/                          # 所有實驗用設定檔（建議 Hydra）
+│  ├─ data/
+│  │  ├─ uci.yaml                    # UCI 9 組資料集路徑/缺失遮罩設定
+│  ├─ model/
+│  │  ├─ grape.yaml                  # GRAPE 超參數（層數、hidden、dropout…）
+│  │  ├─ t2g.yaml                    # T2G-FORMER GE/head/聚合策略
+│  │  └─ lunar.yaml                  # LUNAR k、硬刪比例q或軟權λ
+│  ├─ pipeline/
+│  │  ├─ baseline_grape.yaml
+│  │  ├─ t2g_only.yaml
+│  │  ├─ lunar_only.yaml
+│  │  ├─ combo.yaml                  # T2G + LUNAR（主方法）
+│  │  ├─ random_rowdrop.yaml
+│  │  ├─ random_featdrop.yaml
+│  │  └─ random_clustermerge.yaml
+│  └─ search/                        # 參數掃描空間（k_edge, k_feat, p, q…）
+│
+├─ data/
+│  ├─ raw/                           # 原始 CSV/NPY
+│  ├─ processed/                     # 僅做標準化/編碼（不做修剪）
+│  └─ masks/                         # 固定缺失遮罩（同一遮罩跑所有變體）
+│
+├─ third_party/                      # 以 git submodule 引入原倉庫（不直接改）
+│  ├─ GRAPE/                         # github.com/maxiaoba/GRAPE
+│  ├─ LUNAR/                         # github.com/agoodge/LUNAR
+│  └─ T2G-FORMER/                    # github.com/jyansir/t2g-former
+│
+├─ patches/                          # 若必要，對第三方的最小差異補丁（可空）
+│  ├─ grape_patches.diff
+│  └─ t2g_patches.diff
+│
+├─ src/
+│  ├─ __init__.py
+│  ├─ cli.py                         # 單一入口：python -m src.cli +configs
+│  │
+│  ├─ datasets/
+│  │  ├─ uci.py                      # 統一資料介面 + 缺失遮罩載入
+│  │  ├─ transforms.py               # MinMax/Z-score；類別編碼（one-hot/embedding）
+│  │  └─ schema.py                   # 欄位類型與meta（不做刪減判斷）
+│  │
+│  ├─ adapters/                      # 輕量封裝第三方庫（維持原庫獨立）
+│  │  ├─ grape_adapter.py            # 讓我們的圖/邊/節點對接 GRAPE 訓練/推論
+│  │  ├─ lunar_adapter.py            # 呼叫 LUNAR 計分，回傳 s_i/排序
+│  │  └─ t2g_adapter.py              # 呼叫/載入 T2G GE，輸出 G_w/頭部權重
+│  │
+│  ├─ reducers/                      # 「由模型驅動」的刪減元件（無手工規則）
+│  │  ├─ t2g_feature_selector.py     # 由 G_w 產生特徵重要度、Top-p% 保留
+│  │  ├─ t2g_cluster_aggregator.py   # 社群偵測 + 超特徵聚合
+│  │  ├─ lunar_row_selector.py       # 硬刪q% 或 產生軟權重 w_i
+│  │  ├─ random_rowdrop.py
+│  │  ├─ random_featdrop.py
+│  │  └─ random_clustermerge.py
+│  │
+│  ├─ graphs/
+│  │  ├─ bipartite_builder.py        # 依 Top-k_feat/k_edge 產生二部圖 + 邊權
+│  │  └─ sparsifiers.py              # 不同稀疏策略（值強度/FR權重/殘差融合）
+│  │
+│  ├─ models/
+│  │  └─ grape/
+│  │     ├─ model.py                 # 若需本地微調/替換 GraphSAGE 版本
+│  │     ├─ layers.py
+│  │     └─ loss.py
+│  │
+│  ├─ training/
+│  │  ├─ trainer.py                  # 統一訓練迴圈（impute/label 雙模式）
+│  │  ├─ em_loops.py                 # 可選的迭代：GRAPE→(T2G/LUNAR)→重建圖
+│  │  ├─ callbacks.py                # 早停/檢查點/記錄器
+│  │  └─ metrics.py                  # MAE/RMSE/ACC/AUC/F1
+│  │
+│  ├─ pipelines/                     # 各流程組裝（僅做「排程與呼叫」）
+│  │  ├─ run_baseline_grape.py
+│  │  ├─ run_t2g_only.py
+│  │  ├─ run_lunar_only.py
+│  │  ├─ run_combo.py
+│  │  └─ run_random_ablation.py
+│  │
+│  └─ utils/
+│     ├─ logging.py                  # 統一日誌格式
+│     ├─ seed.py                     # 固定隨機性
+│     └─ io.py                       # 讀寫結果/圖/名單
+│
+├─ scripts/                          # 便利腳本（無業務邏輯）
+│  ├─ download_uci.sh
+│  ├─ train.sh                       # 包裝 cli：指定 configs 組合
+│  ├─ sweep.sh                       # 參數掃描
+│  └─ eval.sh                        # 匯總與繪圖
+│
+├─ experiments/                      # 可重現實驗的產物（自動生成）
+│  ├─ logs/
+│  ├─ checkpoints/
+│  └─ results/                       # 指標表、圖表、解釋性名單
+│
+├─ tests/                            # 關鍵單元測試
+│  ├─ test_graph_builder.py
+│  ├─ test_reducers.py               # LUNAR/T2G/隨機對照輸出形狀/不變量
+│  ├─ test_em_loop.py
+│  └─ test_metrics.py
+│
+└─ docs/
+   ├─ pipeline.md                    # 流程說明（你前面定義的 10 步）
+   ├─ design.md                      # 介面契約（如下）
+   └─ api.md                         # adapters/reducers/graphs 的函式規格
