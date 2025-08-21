@@ -1,1 +1,0 @@
-python /content/GRAPE/baseline_mdi.py --method mean --seed 0 --log_dir m0 uci --data protein

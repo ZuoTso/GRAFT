@@ -1,1 +1,0 @@
-python /content/GRAPE/linear_regression_y.py --domain uci --data wine --log_dir lry --method mean --seed 0
