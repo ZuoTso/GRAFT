@@ -1,0 +1,9 @@
+[submodule "third_party/GRAPE"]
+	path = third_party/GRAPE
+	url = https://github.com/maxiaoba/GRAPE
+[submodule "third_party/LUNAR"]
+	path = third_party/LUNAR
+	url = https://github.com/agoodge/LUNAR
+[submodule "third_party/T2G-FORMER"]
+	path = third_party/T2G-FORMER
+	url = https://github.com/jyansir/t2g-former
