@@ -1,0 +1,26 @@
+1.先打通 pipelines/run_baseline_grape.py
+    - 需要微調GRAPE，使輸出中間產物
+        - X_norm
+        - mask
+        - split_idx
+        - test 評估遮罩 (omega_test_idx)
+            - 與train可能有重疊，若要更公正還要再整理，但會與GRAPE論文中的數據有差距
+        - 原生二部圖(bipartite_edges.npz)
+        - impute/...
+        - label/...
+2.接上 lunar
+3.接上 t2g
+
+---
+
+1. LUNAR+GRAPE
+2. T2G+GRAPE
+3. LUNAR+T2G+GRAPE
+4. T2G+LUNAR+GRAPE
+
+評分指標 
+    GRAPE論文中的評分指標imputation MAE
+    Label prediction MAE
+消融測試
+    隨機剪枝
+    述的4種+GRAPE的組合
