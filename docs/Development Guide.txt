@@ -8,8 +8,19 @@
         - 原生二部圖(bipartite_edges.npz)
         - impute/...
         - label/...
-2.接上 lunar
-3.接上 t2g
+2.建立主架構 pipelines/run_pipeline.py 當作統一入口
+3.接上 lunar
+    - 論文用 k=100，以下平均65(LUNAR本身就是k不敏感)
+        housing（506）→ 20
+        yacht（308）→ 20
+        energy（768）→ 30
+        concrete（1,030）→ 30
+        wine（1,599）→ 40
+        kin8nm（8,192）→ 90
+        power（9,568）→ 100
+        naval（11,934）→ 110
+        protein（45,730）→ 150（資源夠可 200）
+4.接上 t2g
 
 ---
 

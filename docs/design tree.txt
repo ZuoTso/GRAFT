@@ -76,12 +76,24 @@ project-root/
 │  │  └─ metrics.py                  # MAE/RMSE/ACC/AUC/F1
 │  │
 │  ├─ pipelines/                     # 各流程組裝（僅做「排程與呼叫」）
+│  │  ├─ run_pipeline.py
 │  │  ├─ run_baseline_grape.py
 │  │  ├─ run_t2g_only.py
 │  │  ├─ run_lunar_only.py
 │  │  ├─ run_combo.py
 │  │  └─ run_random_ablation.py
 │  │
+│  ├─ grapt_artifacts(outputs)/                        # 例：--artifact_dir=./outputs
+│  │  └─ baseline/
+│  │     └─ {dataset}/seed{seed}/
+│  │        ├─ X_norm.npy, mask.npy, split_idx.json, bipartite_edges.npz, omega_test_idx.npz
+│  │        ├─ impute/, label/, logs/
+│  │        └─ variants/
+│  │           └─ {run_token}/
+│  │              ├─ overlay_manifest.json
+│  │              ├─ mask_t2g.npy / mask_lunar.npy / mask_random.npy（依實際存在）
+│  │              ├─ edge_keep_t2g.npy / edge_keep_lunar.npy（可選）
+│  │              └─ …
 │  └─ utils/
 │     ├─ logging.py                  # 統一日誌格式
 │     ├─ seed.py                     # 固定隨機性
@@ -106,5 +118,5 @@ project-root/
 │
 └─ docs/
    ├─ pipeline.md                    # 流程說明（你前面定義的 10 步）
-   ├─ design.md                      # 介面契約（如下）
+   ├─ design tree.md                      # 介面契約（如下）
    └─ api.md                         # adapters/reducers/graphs 的函式規格
