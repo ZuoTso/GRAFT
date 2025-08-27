@@ -82,19 +82,42 @@ def makedirs(p: Path):
 
 # run_baseline_grape.py
 def run_cmd(cmd, cwd=None, env=None):
-    import os, shlex, subprocess, textwrap, time
+    import os, shlex, subprocess, sys, threading, time
     t0 = time.time()
     args = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+
     print("\n[run_cmd] CWD:", cwd or os.getcwd())
     print("[run_cmd] CMD:", " ".join(args))
-    p = subprocess.run(args, cwd=cwd, env=env, text=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if p.stdout:
-        print(textwrap.indent(p.stdout, prefix="[child stdout] "))
-    if p.stderr:
-        print(textwrap.indent(p.stderr, prefix="[child stderr] "))
-    if p.returncode != 0:
-        raise RuntimeError(f"Command failed with code {p.returncode}")
+
+    # 確保內層 Python 也不緩衝
+    env = dict(os.environ if env is None else env)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    p = subprocess.Popen(
+        args, cwd=cwd, env=env, text=True, bufsize=1,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+
+    def _pump(stream, prefix, sink):
+        try:
+            for line in iter(stream.readline, ""):
+                sink.write(prefix + line)
+                sink.flush()
+        except Exception:
+            # 避免在關閉時拋背景例外
+            pass
+        finally:
+            try: stream.close()
+            except Exception: pass
+
+    th_out = threading.Thread(target=_pump, args=(p.stdout, "[child stdout] ", sys.stdout), daemon=True)
+    th_err = threading.Thread(target=_pump, args=(p.stderr, "[child stderr] ", sys.stderr), daemon=True)
+    th_out.start(); th_err.start()
+    rc = p.wait()
+    th_out.join(timeout=1); th_err.join(timeout=1)
+
+    if rc != 0:
+        raise RuntimeError(f"Command failed with code {rc}")
     return t0
 
 def _glob_result_pkls(grape_root: Path, dataset: str):

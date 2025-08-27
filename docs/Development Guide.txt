@@ -1,4 +1,4 @@
-1.先打通 pipelines/run_baseline_grape.py
+✅1.先打通 pipelines/run_baseline_grape.py
     - 需要微調GRAPE，使輸出中間產物
         - X_norm
         - mask
@@ -8,18 +8,25 @@
         - 原生二部圖(bipartite_edges.npz)
         - impute/...
         - label/...
-2.建立主架構 pipelines/run_pipeline.py 當作統一入口
+
+✅2.建立主架構 pipelines/run_pipeline.py 當作統一入口
+
 3.接上 lunar
-    - 論文用 k=100，以下平均65(LUNAR本身就是k不敏感)
-        housing（506）→ 20
-        yacht（308）→ 20
-        energy（768）→ 30
-        concrete（1,030）→ 30
-        wine（1,599）→ 40
-        kin8nm（8,192）→ 90
-        power（9,568）→ 100
-        naval（11,934）→ 110
-        protein（45,730）→ 150（資源夠可 200）
+    - 論文用 k=100，但論文的訓驗資料量大，以下根據比例做調整
+    - k值選定，以及保留比例
+        - 後續可以往交叉驗證發展
+    - DEFAULTS = 
+        {
+            "yacht":   {"k": 20,  "keep": 0.95},
+            "housing": {"k": 25,  "keep": 0.95},
+            "energy":  {"k": 30,  "keep": 0.90},
+            "concrete":{"k": 35,  "keep": 0.90},
+            "wine":    {"k": 40,  "keep": 0.85},
+            "kin8nm":  {"k": 100, "keep": 0.85},
+            "power":   {"k": 100, "keep": 0.85},
+            "naval":   {"k": 100, "keep": 0.85},
+            "protein": {"k": 100, "keep": 0.80},
+        }
 4.接上 t2g
 
 ---
@@ -34,4 +41,6 @@
     Label prediction MAE
 消融測試
     隨機剪枝
-    述的4種+GRAPE的組合
+    上述的4種+GRAPE的組合
+未來發展    
+    LUNAR 保留比例

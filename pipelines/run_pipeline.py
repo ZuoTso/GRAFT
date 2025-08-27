@@ -227,7 +227,6 @@ class LUNARStage(Stage):
                 "請設定環境變數 GRAFT_LUNAR_DIR 指向含 LUNAR.py 的資料夾，"
                 "或把第三方程式碼放到 <repo_root>/third_party/LUNAR。"
             )
-        _run_lunar(self.args, self.contract, self.variant_dir, self.stage_args)
 
         # 從 prefix 取用命令列參數（允許 --lunar.keep 或 --lunar.keep_ratio）
         opts = dict(self.stage_args or {})
@@ -238,7 +237,7 @@ class LUNARStage(Stage):
         variant_name = self.variant_dir.name
 
         # 交給 adapter 跑 LUNAR，並產出 mask_lunar.npy / edge_keep_lunar.npy / lunar_scores.npy ...
-        run_lunar_stage(
+        _run_lunar(
             artifact_dir=str(self.contract.artifact_dir),
             dataset=self.contract.dataset,
             seed=int(self.contract.seed),
