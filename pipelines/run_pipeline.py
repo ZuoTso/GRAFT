@@ -28,6 +28,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
+from pathlib import Path
+import sys as _sys
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
+
+try:
+    from pipelines.lunar_adapter import run_lunar_stage as _run_lunar
+except Exception:
+    _run_lunar = None   # 先不報錯；只有真的用到 lunar stage 才檢查
+
+try:
+    from pipelines.t2g_adapter import run_t2g_stage as _run_t2g
+except Exception:
+    _run_t2g = None
+
 try:
     import numpy as np
 except Exception:
@@ -186,6 +202,11 @@ class T2GStage(Stage):
     name = "t2g"
 
     def run(self) -> None:
+        if _run_t2g is None:
+            raise ModuleNotFoundError(
+                "T2G 未就緒：偵測不到 t2g_adapter 或其依賴。請完成對應設定再使用。"
+            )
+        _run_t2g(self.args, self.contract, self.variant_dir, self.stage_args)
         # TODO: 在這裡產生 t2g 的遮罩與/或邊 keep，存到 self.variant_dir
         # 例如：np.save(self.variant_dir / "mask_t2g.npy", M)
         ensure_dir(self.contract.p_logs())
@@ -200,12 +221,42 @@ class LUNARStage(Stage):
     name = "lunar"
 
     def run(self) -> None:
-        # TODO: 在這裡產生 lunar 的遮罩與/或邊 keep，存到 self.variant_dir
+        if _run_lunar is None:
+            raise ModuleNotFoundError(
+                "LUNAR 未就緒：偵測不到 lunar_adapter 或其依賴。\n"
+                "請設定環境變數 GRAFT_LUNAR_DIR 指向含 LUNAR.py 的資料夾，"
+                "或把第三方程式碼放到 <repo_root>/third_party/LUNAR。"
+            )
+        _run_lunar(self.args, self.contract, self.variant_dir, self.stage_args)
+
+        # 從 prefix 取用命令列參數（允許 --lunar.keep 或 --lunar.keep_ratio）
+        opts = dict(self.stage_args or {})
+        keep_ratio = opts.get("keep_ratio", opts.get("keep", None))
+        keep_ratio = float(keep_ratio) if keep_ratio is not None else None
+
+        # 讓輸出寫到 orchestrator 這次 run 的 variants 目錄（與其他 stage 對齊）
+        variant_name = self.variant_dir.name
+
+        # 交給 adapter 跑 LUNAR，並產出 mask_lunar.npy / edge_keep_lunar.npy / lunar_scores.npy ...
+        run_lunar_stage(
+            artifact_dir=str(self.contract.artifact_dir),
+            dataset=self.contract.dataset,
+            seed=int(self.contract.seed),
+            variant=variant_name,
+            k=(int(opts["k"]) if "k" in opts else None),
+            keep_ratio=keep_ratio,
+            samples=str(opts.get("samples", "MIXED")),
+            val_size=float(opts.get("val_size", 0.10)),
+            rescale=bool(opts.get("rescale", False)),
+            train_new_model=bool(opts.get("train_new_model", True)),
+        )
+
+        # 補一個簡短 log（可選）
         ensure_dir(self.contract.p_logs())
         write_json(self.contract.p_logs() / "lunar_log.json", {
             "stage": self.name,
             "params": self.stage_args,
-            "note": "TODO: 產生 mask_lunar.npy / edge_keep_lunar.npy 到 variants 目錄",
+            "variant_dir": str(self.variant_dir),
             "time": now_str(),
         })
 
@@ -247,7 +298,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--grape_root", type=str, required=True, help="Path to GRAPE project root (contains train_mdi.py/train_y.py)")
 
     # Baseline 準備
-    p.add_argument("--auto_prep", action="store_true", help="Auto run GRAPE to dump baseline intermediates if missing")
+    p.add_argument("--auto_prep", action="store_true", help="Auto build baseline intermediates if missing (prep-only)")
+    p.add_argument("--prep_only", action="store_true", help="Only build baseline intermediates and exit (no final GRAPE training)")
+    p.add_argument("--force_prep", action="store_true", help="Rebuild baseline intermediates even if files already exist")
 
     args, unknown = p.parse_known_args(argv)
 
@@ -280,22 +333,21 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 # =========================
 
 def run_grape_prep(args: argparse.Namespace, contract: Contract) -> None:
-    """若 baseline 中介物不存在，呼叫 GRAPE 進行完整訓練以導出中介物（透過 inject_artifact_flags）。
-    嚴格 manifest 模式下，這裡會先建立一份『prep 專用 manifest』並用 ENV 傳入，
-    內容僅包含 baseline 的 mask 路徑（即使檔案尚未存在，gnn 的 EXPORT 之後就會產生）。
+    """Prep-only: export GRAPE baseline intermediates, do NOT train.
+    It writes variants/_prep/overlay_manifest.json and sets GRAPT_PREP_ONLY=1 for the child process.
     """
     grape = Path(args.grape_script).resolve()
     if not grape.exists():
         raise FileNotFoundError(f"找不到 GRAPE 腳本：{grape}")
-    
+
     # 準備 prep manifest：baseline/<ds>/seedX/variants/_prep/overlay_manifest.json
     prep_dir = contract.p_variants_root() / "_prep"
     ensure_dir(prep_dir)
     prep_manifest = {
-        "masks": [str(contract.p_mask())],   # 僅 baseline mask；gnn 會在 EXPORT 先把它寫出
+        "masks": [str(contract.p_mask())],
         "edge_keeps": [],
         "order": "grape",
-        "mask_op": os.getenv("GRAFT_MASK_OP", args.mask_op),
+        "mask_op": os.getenv("GRAFT_MASK_OP", "AND"),
         "mode": "soft",
         "variant_dir": str(prep_dir),
         "baseline_dir": str(contract.baseline_dir()),
@@ -303,25 +355,26 @@ def run_grape_prep(args: argparse.Namespace, contract: Contract) -> None:
     prep_manifest_p = prep_dir / "overlay_manifest.json"
     write_json(prep_manifest_p, prep_manifest)
 
-    print("[PREP] Baseline intermediates not found → run GRAPE to dump via inject_artifact_flags…")
+    print("[PREP] Baseline intermediates not found → export via GRAPE (prep-only)…")
     cli = [sys.executable, str(grape),
            "--grape_root", args.grape_root,
            "--dataset", args.dataset,
            "--seed", str(args.seed),
            "--artifact_dir", str(args.artifact_dir),
            "--task", "both",
+           "--prep_only",
            "--inject_artifact_flags"]
 
-    # 嚴格 manifest 必要的環境變數
+    # 嚴格 manifest + PREP_ONLY
     env = os.environ.copy()
     env["GRAFT_OVERLAY_MANIFEST"] = str(prep_manifest_p)
     env["GRAFT_MASK_OP"] = prep_manifest["mask_op"]
+    env["GRAPT_PREP_ONLY"] = "1"
 
     print("  →", " ".join(cli))
     proc = subprocess.run(cli, env=env)
     if proc.returncode != 0:
         raise RuntimeError(f"GRAPE prep 失敗（returncode={proc.returncode}）")
-
 
 def build_run_token(args: argparse.Namespace, contract: Contract) -> str:
     fingerprint = {
@@ -435,12 +488,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     ensure_dir(contract.p_variants_root())
 
     # Baseline 檢查/準備
-    need_prep = not (contract.p_X().exists() and contract.p_mask().exists())
+    need_prep = (
+        args.force_prep or
+        not (
+            contract.p_X().exists() and contract.p_mask().exists() and
+            contract.p_edges().exists() and contract.p_split().exists()
+        )
+    )
     if need_prep:
         if args.auto_prep:
             run_grape_prep(args, contract)
         else:
-            raise RuntimeError("找不到 baseline X/mask，請先以 --auto_prep 跑一次或手動產出 baseline 中介物。")
+            raise RuntimeError("找不到完整 baseline 中介物（X/mask/edges/split）。請使用 --auto_prep 或先手動產出。")
+        
+    # Optional early exit (prep-only mode)
+    if args.prep_only:
+        print("[EXIT] prep_only=True → 已產 baseline 中介物，未執行最終 GRAPE 訓練。")
+        return 0
 
     # 決定執行順序
     modules = [m.strip() for m in args.modules.split(',') if m.strip()]
@@ -480,8 +544,102 @@ def main(argv: Optional[List[str]] = None) -> int:
         stage.run()
         print(f"[DONE] {m}: end   @ {now_str()}")
 
+    # def preflight_masks(contract: Contract, manifest_p: Path, strict: bool = False) -> None:
+    #     """檢查 manifest 指到的 masks/edge_keeps 是否存在、形狀與 dtype 是否合理。
+    #     - strict=False：只警告不擋流程
+    #     - strict=True ：遇到問題直接 raise（一般不建議）
+    #     """
+    #     def _warn(msg: str):
+    #         print(f"[warn preflight] {msg}")
+
+    #     try:
+    #         obj = read_json(manifest_p)
+    #         if not obj:
+    #             raise RuntimeError("manifest 解析失敗")
+    #         masks = obj.get("masks", [])
+    #         keeps = obj.get("edge_keeps", [])
+    #         mask_op = obj.get("mask_op", None)
+    #         order = obj.get("order", None)
+
+    #         # 基本欄位
+    #         if not masks:
+    #             raise RuntimeError("manifest.masks 為空")
+    #         if mask_op not in ("AND", "OR"):
+    #             raise RuntimeError("manifest.mask_op 必須是 AND/OR")
+    #         if not order or "grape" not in order:
+    #             raise RuntimeError("manifest.order 缺少 'grape'")
+
+    #         # 讀 baseline X 的形狀
+    #         import numpy as np
+    #         Xp = contract.p_X()
+    #         if not Xp.exists():
+    #             raise RuntimeError(f"缺少 baseline X：{Xp}")
+    #         X = np.load(Xp, mmap_mode="r")
+    #         n, d = X.shape
+
+    #         # 檢查每個 mask
+    #         for mp in masks:
+    #             mp = Path(mp)
+    #             if not mp.exists():
+    #                 msg = f"mask 不存在：{mp}"
+    #                 if strict: raise RuntimeError(msg)
+    #                 _warn(msg); continue
+    #             M = np.load(mp, mmap_mode="r")
+    #             if M.shape != (n, d):
+    #                 msg = f"mask 形狀不符：{mp.name} {M.shape} ≠ {(n, d)}"
+    #                 if strict: raise RuntimeError(msg)
+    #                 _warn(msg)
+    #             if M.dtype not in (np.bool_, np.uint8, np.int8, np.int32, np.int64):
+    #                 _warn(f"mask dtype 非 bool/uint8：{mp.name} ({M.dtype})")
+    #             elif M.dtype == np.uint8:
+    #                 _warn(f"mask dtype uint8（預期 bool）→ 可接受 0/1，將於訓練時視為布林：{mp.name}")
+
+    #         # edge_keep 長度（如果有）
+    #         Ep = contract.p_edges()
+    #         if keeps and Ep.exists():
+    #             try:
+    #                 E = np.load(Ep)
+    #                 rows, cols = E.get("rows"), E.get("cols")
+    #                 m = rows.shape[0] if (rows is not None and cols is not None) else None
+    #             except Exception:
+    #                 m = None
+    #             if m is None:
+    #                 _warn("無法讀取 bipartite_edges.npz 的 rows/cols，略過 keep 檢查")
+    #             else:
+    #                 for kp in keeps:
+    #                     kp = Path(kp)
+    #                     if not kp.exists():
+    #                         msg = f"edge_keep 不存在：{kp}"
+    #                         if strict: raise RuntimeError(msg)
+    #                         _warn(msg); continue
+    #                     keep = np.load(kp, mmap_mode="r")
+    #                     if keep.shape[0] != m:
+    #                         msg = f"edge_keep 長度不符：{kp.name} {keep.shape[0]} ≠ {m}"
+    #                         if strict: raise RuntimeError(msg)
+    #                         _warn(msg)
+    #     except Exception as e:
+    #         if strict:
+    #             raise
+    #         print(f"[warn preflight] 檢查時發生例外：{e}（已放行）")
+
+    # run_pipeline.py（在 make_manifest 前，加一段嚴格檢查）
+    expected = {"lunar": "mask_lunar.npy", "t2g": "mask_t2g.npy", "random": "mask_random.npy"}
+    missing = []
+    for m in order:
+        if m == "grape": continue
+        exp = expected.get(m)
+        if exp and not (variant_dir / exp).exists():
+            missing.append(f"{m}:{exp}")
+    if missing:
+        raise FileNotFoundError(f"Stage outputs missing → {missing}；請檢查 {variant_dir} 內的產物或 stage 執行紀錄")
+
     # 構造 manifest（嚴格）並呼叫 GRAPE
     manifest_p = make_manifest(args, contract, variant_dir, order)
+    # preflight_masks(contract, manifest_p)
+    # Optional early exit (只準備中介物就離開)
+    if args.prep_only:
+        print("[EXIT] prep_only=True → 已產 baseline 中介物，未執行最終 GRAPE 訓練。")
+        return 0
     print(f"[INFO] manifest 寫入：{manifest_p}")
 
     print(f"[RUN ] grape: start @ {now_str()}")
