@@ -43,6 +43,7 @@ try:
     from pipelines.t2g_adapter import run_t2g_stage as _run_t2g
 except Exception:
     _run_t2g = None
+import subprocess
 
 try:
     import numpy as np
@@ -101,7 +102,10 @@ class Contract:
     def p_X(self) -> Path: return self.baseline_dir() / "X_norm.npy"
     def p_mask(self) -> Path: return self.baseline_dir() / "mask.npy"
     def p_edges(self) -> Path: return self.baseline_dir() / "bipartite_edges.npz"
-    def p_split(self) -> Path: return self.baseline_dir() / "split_idx.json"
+    def p_split_json(self) -> Path: return self.baseline_dir() / "split_idx.json"
+    def p_split_npz(self) -> Path:  return self.baseline_dir() / "split_idx.npz"
+    def p_split_any(self) -> Path:
+        return self.p_split_json() if self.p_split_json().exists() else self.p_split_npz()
     def p_logs(self) -> Path: return self.baseline_dir() / "logs"
     def p_variants_root(self) -> Path: return self.baseline_dir() / "variants"
 
@@ -120,7 +124,7 @@ class Stage:
 
     def input_fingerprints(self) -> List[Tuple[str, float]]:
         fps = []
-        for p in [self.contract.p_X(), self.contract.p_mask(), self.contract.p_edges(), self.contract.p_split()]:
+        for p in [self.contract.p_X(), self.contract.p_mask(), self.contract.p_edges(), self.contract.p_split_any()]:
             fps.append((str(p), mtime_safe(p)))
         return fps
 
@@ -206,6 +210,11 @@ class T2GStage(Stage):
             raise ModuleNotFoundError(
                 "T2G 未就緒：偵測不到 t2g_adapter 或其依賴。請完成對應設定再使用。"
             )
+        # 若上一個 stage 已匯出權重，且這裡沒給 weights_glob，就幫忙帶入
+        if not self.stage_args.get("weights_glob"):
+            cand = self.variant_dir / "t2g_weights"
+            if cand.exists():
+                self.stage_args["weights_glob"] = str(cand / "W_layer*.npy")
         _run_t2g(self.args, self.contract, self.variant_dir, self.stage_args)
         # TODO: 在這裡產生 t2g 的遮罩與/或邊 keep，存到 self.variant_dir
         # 例如：np.save(self.variant_dir / "mask_t2g.npy", M)
@@ -266,7 +275,86 @@ class GRAPEStage(Stage):
         # 在 orchestrator 主流程中處理（建立 manifest 與呼叫），此處不使用
         raise RuntimeError("GRAPEStage.run 不應被直接呼叫；請使用 orchestrator 中的 grape 流程。")
 
+class T2GExportStage(Stage):
+    name = "t2gexp"
+    def run(self) -> None:
+        import glob
+        # --- 準備輸出目錄與 log ---
+        out_dir = self.variant_dir / "t2g_weights"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = self.variant_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "t2gexp_stdout.log"
+
+        # --- 取得並修正 repo 路徑（容錯：傳到 bin/ 或 t2g_former.py 也能自救回 repo 根）---
+        repo_arg = self.stage_args.get("t2g_repo")
+        if not repo_arg:
+            raise ValueError("t2gexp 需要 --t2gexp.t2g_repo 指向 t2g-former 專案根目錄")
+        repo = Path(str(repo_arg))
+        if repo.is_file():
+            # e.g. .../bin/t2g_former.py -> 專案根
+            repo = repo.parent.parent
+        elif repo.name == "bin":
+            # e.g. .../bin/ -> 專案根
+            repo = repo.parent
+
+        # --- 組 CLI ---
+        cli = [
+            sys.executable, "-u",  # 不緩衝
+            "pipelines/t2g_export_from_grape.py",
+            "--t2g_repo", str(repo),
+            "--baseline_dir", str(self.contract.baseline_dir()),
+            "--variant_dir", str(self.variant_dir),
+            "--output", str(out_dir),
+        ]
+        # 轉傳可選參數
+        passthrough_keys = [
+            "epochs", "lr", "batch_size", "max_batches", "train_parts", "train_on",
+            "head_reduce", "batch_reduce", "module_regex", "device", "task",
+            "norm_per_layer", "print_modules",
+        ]
+        for k in passthrough_keys:
+            if k not in self.stage_args:
+                continue
+            v = self.stage_args[k]
+            if isinstance(v, bool):
+                if v:  # 只在 True 時加入旗標
+                    cli += [f"--{k}"]
+            elif v is not None and str(v) != "":
+                cli += [f"--{k}", str(v)]
+
+        print("  → export T2G weights:", " ".join(cli))
+
+        # --- 執行（即時顯示＋寫 variants 專屬 log）---
+        env = dict(os.environ, PYTHONUNBUFFERED="1")  # 子程式不緩衝
+        with subprocess.Popen(
+            cli,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,              # 行緩衝
+            env=env,
+        ) as p, open(log_file, "w", encoding="utf-8") as f:
+            assert p.stdout is not None
+            for line in p.stdout:
+                print(f"[t2gexp] {line}", end="")  # 顯示到父行程（會被你外層 > 或 tee 接走）
+                f.write(line)
+            ret = p.wait()
+
+        if ret != 0:
+            raise RuntimeError(f"t2gexp 匯權重失敗（code={ret}），詳見 {log_file}")
+
+        # --- 基本產物檢查：至少要有一個 W_layer*.npy ---
+        w_files = sorted(glob.glob(str(out_dir / "W_layer*.npy")))
+        if not w_files:
+            raise RuntimeError(
+                f"t2gexp 看起來沒有輸出層權重（{out_dir} 下無 W_layer*.npy）。請檢查 {log_file}"
+            )
+        print(f"[t2gexp] exported {len(w_files)} layer matrices → {out_dir}")
+        print(f"[t2gexp] log saved → {log_file}")
+
 STAGE_REGISTRY = {
+    "t2gexp": T2GExportStage,
     "random": RandomStage,
     "t2g": T2GStage,
     "lunar": LUNARStage,
@@ -320,6 +408,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             i += 1
         return out
 
+    args._t2gexp = harvest_prefix("t2gexp")
     args._t2g = harvest_prefix("t2g")
     args._lunar = harvest_prefix("lunar")
     args._random = harvest_prefix("random")
@@ -390,7 +479,7 @@ def build_run_token(args: argparse.Namespace, contract: Contract) -> str:
             (str(contract.p_X()), mtime_safe(contract.p_X())),
             (str(contract.p_mask()), mtime_safe(contract.p_mask())),
             (str(contract.p_edges()), mtime_safe(contract.p_edges())),
-            (str(contract.p_split()), mtime_safe(contract.p_split())),
+            (str(contract.p_split_any()), mtime_safe(contract.p_split_any())),
         ],
     }
     return sha1_text(json.dumps(fingerprint, sort_keys=True))
@@ -491,7 +580,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.force_prep or
         not (
             contract.p_X().exists() and contract.p_mask().exists() and
-            contract.p_edges().exists() and contract.p_split().exists()
+            contract.p_edges().exists() and contract.p_split_any().exists()
         )
     )
     if need_prep:
@@ -537,7 +626,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         cls = STAGE_REGISTRY.get(m)
         if cls is None:
             raise KeyError(f"未知模組：{m}。可用：{sorted(STAGE_REGISTRY.keys())}")
-        stage_args = {"t2g": args._t2g, "lunar": args._lunar, "random": args._random}.get(m, {})
+        stage_args = {
+            "t2gexp": args._t2gexp, "t2g": args._t2g,
+            "lunar": args._lunar, "random": args._random
+        }.get(m, {})
         stage = cls(args=args, contract=contract, variant_dir=variant_dir, stage_args=stage_args)
         print(f"[RUN ] {m}: start @ {now_str()}")
         stage.run()

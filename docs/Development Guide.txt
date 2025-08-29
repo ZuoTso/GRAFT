@@ -27,13 +27,25 @@
             "naval":   {"k": 100, "keep": 0.85},
             "protein": {"k": 100, "keep": 0.80},
         }
-4.接上 t2g
+✅4.接上 t2g
+    - T2G
+    - adaptive edge weights
+    - static edge topology
+    - --t2gexp.epochs 0
+        - epochs = 0（不訓練，僅 forward 匯權重）
+            - 訊號來源：主要來自模型的初始結構偏好（初始化、正規化）＋資料本身的無監督統計（特徵共變、尺度等）。靜態拓樸參數未被學到，適應式邊多半反映資料局部關係。
+            - 特性：計算快、零超參、不受標籤噪音影響；但分數可能較「粗」，對初始化/seed 較敏感。
+            - 適配任務：對 GRAPE 的補值任務（impute） 反而常是合理的基線，因為補值重視特徵間的內在關聯，不需要 label 導引。
+        - epochs > 0（輕量監督訓練後再匯權重）
+            - 訊號來源：加入了目標 y 的監督訊號，GE/FR-Graph 會被推向「對任務有用的互動」。
+            - 特性：分數更「任務導向」，通常對 label 預測 有利；但有過擬合風險（尤其資料小、噪音大），也更吃超參（lr、epochs、batch）。
+            - 適配任務：對 GRAPE 的標籤預測（label） 常較有幫助；對 補值 未必更好（可能犧牲「普適關聯」去迎合 y）。
 
 ---
 
-1. LUNAR+GRAPE
-2. T2G+GRAPE
-3. LUNAR+T2G+GRAPE
+✅1. LUNAR+GRAPE
+✅2. T2G+GRAPE
+✅3. LUNAR+T2G+GRAPE
 4. T2G+LUNAR+GRAPE
 
 評分指標 
