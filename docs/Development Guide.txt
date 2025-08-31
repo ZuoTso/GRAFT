@@ -17,16 +17,28 @@
         - 後續可以往交叉驗證發展
     - DEFAULTS = 
         {
-            "yacht":   {"k": 20,  "keep": 0.95},
-            "housing": {"k": 25,  "keep": 0.95},
-            "energy":  {"k": 30,  "keep": 0.90},
-            "concrete":{"k": 35,  "keep": 0.90},
-            "wine":    {"k": 40,  "keep": 0.85},
-            "kin8nm":  {"k": 100, "keep": 0.85},
-            "power":   {"k": 100, "keep": 0.85},
-            "naval":   {"k": 100, "keep": 0.85},
-            "protein": {"k": 100, "keep": 0.80},
+            "yacht":   {"k": 20,  "keep": 0.95},✔️
+            "housing": {"k": 25,  "keep": 0.95},✔️
+            "energy":  {"k": 30,  "keep": 0.90},✔️
+            "concrete":{"k": 35,  "keep": 0.90},✔️
+            "wine":    {"k": 40,  "keep": 0.85},✖️
+            "kin8nm":  {"k": 100, "keep": 0.85},❔
+            "power":   {"k": 100, "keep": 0.85},❔
+            "naval":   {"k": 100, "keep": 0.85},✖️
+            "protein": {"k": 100, "keep": 0.80},❔
         }
+    - shapes
+        - concrete：1030 × 8。
+        - energy：768 × 8（有兩個目標：Heating/Cooling Load）。
+        - housing（Boston Housing）：506 × 13。
+        - kin8nm：8192 × 8。
+        - naval（Condition Based Monitoring of Naval Propulsion Plants）：11934 × 16。([archive.ics.uci.edu][1])
+        - power（Combined Cycle Power Plant, CCPP）：9568 × 4。
+        - protein（Physicochemical Properties of Protein Tertiary Structure / CASP）：45730 × 9。
+        - wine（Wine Quality）：
+            - red：1599 × 11；white：4898 × 11（GRAPE/常見基準多半用 red 版）。
+        - yacht（Yacht Hydrodynamics）：308 × 6。
+
 ✅4.接上 t2g
     - T2G
     - adaptive edge weights
@@ -46,7 +58,8 @@
 ✅1. LUNAR+GRAPE
 ✅2. T2G+GRAPE
 ✅3. LUNAR+T2G+GRAPE
-4. T2G+LUNAR+GRAPE
+✅4. T2G+LUNAR+GRAPE
+✅5. Ramdom+GRAPE
 
 評分指標 
     GRAPE論文中的評分指標imputation MAE

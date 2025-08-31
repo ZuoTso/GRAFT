@@ -11,10 +11,9 @@ GRAFT Orchestrator — 完成版（variants + overlay manifest 嚴格模式）
   `pipelines/run_baseline_grape.py --task both --inject_artifact_flags` 產出中介物。
 
 注意：
-- 預設 `--grape_script` 指向 `pipelines/run_baseline_grape.py`（請確認位置）。
+- 預設 `--grape_script` 指向 `pipelines/run_baseline_grape.py`。
 - **必填 `--grape_root`**（GRAPE 專案根目錄，內含 `train_mdi.py`/`train_y.py`）。
 - 預設 `--mask_op=AND`，可用 `--mask_op OR` 或環境變數 `GRAFT_MASK_OP` 覆寫。
-- T2G / LUNAR 目前為 TODO 佔位；RANDOM 已能輸出 `mask_random.npy` / `edge_keep_random.npy`。
 """
 from __future__ import annotations
 import argparse
@@ -37,7 +36,7 @@ if str(_REPO_ROOT) not in _sys.path:
 try:
     from pipelines.lunar_adapter import run_lunar_stage as _run_lunar
 except Exception:
-    _run_lunar = None   # 先不報錯；只有真的用到 lunar stage 才檢查
+    _run_lunar = None
 
 try:
     from pipelines.t2g_adapter import run_t2g_stage as _run_t2g
@@ -51,7 +50,7 @@ except Exception:
     np = None
 
 # =========================
-# 小工具
+# Tool
 # =========================
 
 def now_str() -> str:
@@ -85,9 +84,9 @@ def mtime_safe(p: Path) -> float:
     except FileNotFoundError:
         return 0.0
 
-# =========================
-# 契約：baseline 位置與檔案名
-# =========================
+# =========================================
+# Contract: Baseline Location and File Name
+# =========================================
 
 @dataclass
 class Contract:
@@ -136,7 +135,7 @@ class RandomStage(Stage):
 
     def run(self) -> None:
         if np is None:
-            raise RuntimeError("Random stage 需要 numpy。請安裝 numpy 或移除此 stage。")
+            raise RuntimeError("Random stage needs numpy.")
         # 參數
         drop_rows = float(self.stage_args.get("drop_rows", 0.0))
         drop_cols = float(self.stage_args.get("drop_cols", 0.0))
@@ -216,13 +215,17 @@ class T2GStage(Stage):
             if cand.exists():
                 self.stage_args["weights_glob"] = str(cand / "W_layer*.npy")
         _run_t2g(self.args, self.contract, self.variant_dir, self.stage_args)
-        # TODO: 在這裡產生 t2g 的遮罩與/或邊 keep，存到 self.variant_dir
-        # 例如：np.save(self.variant_dir / "mask_t2g.npy", M)
+        
+        mask_p = self.variant_dir / "mask_t2g.npy"
+        if not mask_p.exists():
+            raise FileNotFoundError(
+                f"[t2g] 期望的輸出不存在：{mask_p}。\n"
+                f"請檢查 weights_glob 是否指向有效的 W_layer*.npy，或先跑 t2gexp。"
+            )
         ensure_dir(self.contract.p_logs())
         write_json(self.contract.p_logs() / "t2g_log.json", {
             "stage": self.name,
             "params": self.stage_args,
-            "note": "TODO: 產生 mask_t2g.npy / edge_keep_t2g.npy 到 variants 目錄",
             "time": now_str(),
         })
 

@@ -37,7 +37,7 @@ def _round_to_5(x: int) -> int: return int(round(x / 5) * 5)
 
 def _auto_k(n_train: int, val_size: float) -> int:
     n_eff = max(1, int(n_train * (1.0 - val_size)))
-    k0 = int(np.clip(_round_to_5(int(np.sqrt(max(1, n_train)))), 15, 150))
+    k0 = int(np.clip(_round_to_5(int(np.sqrt(max(1, n_train)))), 15, 100))
     return min(k0, max(1, n_eff - 1))
 
 def _write_json(p: Path, obj) -> None:
@@ -80,7 +80,17 @@ def run_lunar_stage(
     if k is None or k <= 0:
         k = int(ds_def.get("k", _auto_k(len(train_idx), val_size)))
     if keep_ratio is None:
-        keep_ratio = float(ds_def.get("keep", 0.80))
+        kr = ds_def.get("keep", None)
+        if kr is None:
+            raise ValueError(
+                f"未提供 keep_ratio，且 DEFAULTS 沒有此資料集（{dataset}）的 keep 值"
+            )
+        keep_ratio = float(kr)
+    else:
+        keep_ratio = float(keep_ratio)
+
+    if not (0.0 < keep_ratio <= 1.0):
+        raise ValueError(f"keep_ratio 不在 (0,1]：{keep_ratio}")
 
     # 切 train/val（只在訓練 rows 上切）
     rng = np.random.default_rng(int(seed))
@@ -130,23 +140,11 @@ def run_lunar_stage(
     # 可選：若存在二部圖邊檔，順帶產 edge_keep（簡單實用）
     edges_p = base / "bipartite_edges.npz"
     edge_keep_path = None
-    # （先註解掉以下這整段）
-    # if edges_p.exists():
-    #     try:
-    #         E = np.load(edges_p)
-    #         rows = E["obs_idx"] if "obs_idx" in E.files else (E["rows"] if "rows" in E.files else None)
-    #         if rows is not None:
-    #             edge_keep = keep_rows[rows.astype(np.int64)]
-    #             edge_keep_path = var_dir / "edge_keep_lunar.npy"
-    #             np.save(edge_keep_path, edge_keep.astype(bool))
-    #     except Exception as e:
-    #         print("[WARN] edge_keep 產生失敗：", e)
 
     # overlay manifest：GRAPE 端會 AND 疊這張 mask（與邊）
     mani = {
         "op": "AND",
         "masks": [str(var_dir / "mask_lunar.npy")],
-        # "edge_keeps": ([str(edge_keep_path)] if edge_keep_path else [])
         "edge_keeps": []   # << 先空陣列
     }
     mani_p = var_dir / "overlay_manifest.json"
@@ -162,7 +160,7 @@ def run_lunar_stage(
         "manifest": str(mani_p)
     })
 
-    # ===== 發展空間（保留即可，後續要做再開）=====
+    # ========== Development Space ==========
     # TODO: 支援 keep_ratio 網格掃描，讀回 GRAPE valid MAE 選最佳
     # TODO: 支援 score τ 直接下限（非分位數）
     # TODO: 支援 column 級（X.T 再跑 LUNAR），產 col_keep 與特徵遮罩

@@ -1,4 +1,4 @@
-project-root/
+GRAFT/
 ├─ README.md
 ├─ LICENSE
 ├─ pyproject.toml                    # 或 setup.cfg；統一套件管理

@@ -11,10 +11,7 @@ T2G Adapter (soft feature-prune → mask_t2g.npy)
 設計目標：
 - 只取 T2G-Former 中「對特徵的重要度/關聯度打分」這一段，輸出一張列為 rows、欄為 cols 的遮罩，
   讓 orchestrator 以 AND/OR 疊上 GRAPE baseline 的 mask，交由 GRAPE 訓練。
-- 支援三種來源：
-  (A) GE/FR-Graph 權重矩陣 (layers) → 以加權度數/中心性做打分（推薦）
-  (B) 直接給定每個欄位的 score 向量
-  (C) fallback：用 X 的簡單統計（如變異數）做臨時打分
+- GE/FR-Graph 權重矩陣 (layers) → 以加權度數/中心性做打分
 
 輸出：
   variants/<run_token>/
@@ -173,31 +170,32 @@ def run_t2g_stage(args, contract, variant_dir: Path, stage_args: Dict[str, Any])
     coverage_power = float(stage_args.get("coverage_power", 1.0))
 
     # ---- 計算 scores ----
-    scores: np.ndarray
-    src: str
+    # 只允許 FR-Graph
     if scores_npy is not None:
-        v = _load_optional_npy(str(scores_npy))
-        if v is None or v.shape != (d,):
-            raise ValueError(f"scores_npy 的形狀需為 (d,)：{scores_npy} 實際 {None if v is None else v.shape}")
-        scores = v.astype(np.float64, copy=False)
-        src = "scores_npy"
-    elif weights_glob is not None or weights_npy is not None:
-        mats: List[np.ndarray] = []
-        if weights_glob is not None:
-            mats.extend(_collect_layer_weights(str(weights_glob)))
-        if weights_npy is not None:
-            W = _load_optional_npy(str(weights_npy))
-            if W is None or W.ndim != 2 or W.shape[0] != W.shape[1]:
-                raise ValueError(f"weights_npy 需為 (d,d) 矩陣：{weights_npy} 實際 {None if W is None else W.shape}")
-            mats.append(W.astype(np.float64, copy=False))
-        if not mats:
-            raise RuntimeError("未能載入任何權重矩陣。")
-        scores = _combine_layer_scores(mats, layer_weights=layer_weights, abs_weights=abs_weights,
-                                       symmetrize=symmetrize, mode=degree_mode)
-        src = "graph_weights"
-    else:
-        scores = _fallback_scores(X, M0, mode=fallback_mode, coverage_power=coverage_power)
-        src = "fallback"
+        raise ValueError("T2G only supports FR-Graph weights. Remove --t2g.scores_npy.")
+    if (weights_glob is None) and (weights_npy is None):
+        raise RuntimeError("FR-Graph required: set --t2g.weights_glob or --t2g.weights_npy.")
+
+    # 收集矩陣 → 檢查形狀 → 合成分數
+    mats = []
+    if weights_glob is not None:
+        mats.extend(_collect_layer_weights(str(weights_glob)))  # 會檢查 (d,d) 並報錯 :contentReference[oaicite:11]{index=11}
+    if weights_npy is not None:
+        W = _load_optional_npy(str(weights_npy))
+        if W is None or W.ndim != 2 or W.shape[0] != W.shape[1]:
+            raise ValueError(f"weights_npy 需為 (d,d) 矩陣：{weights_npy} 實際 {None if W is None else W.shape}")  # :contentReference[oaicite:12]{index=12}
+        mats.append(W.astype(np.float64, copy=False))
+    if not mats:
+        raise RuntimeError("未能載入任何權重矩陣。")  # :contentReference[oaicite:13]{index=13}
+
+    scores = _combine_layer_scores(
+        mats,
+        layer_weights=layer_weights,   # 若未給，預設全 1.0  :contentReference[oaicite:14]{index=14}
+        abs_weights=abs_weights,
+        symmetrize=symmetrize,
+        mode=degree_mode               # "in" | "out" | "both"   :contentReference[oaicite:15]{index=15}
+    )
+    src = "graph_weights"
 
     # ---- 依分數選欄 ----
     kept_cols, removed_cols = _select_topk(scores, k=k, keep_ratio=keep_cols_ratio)
