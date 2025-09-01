@@ -12,11 +12,11 @@ DEFAULTS = {
     "housing": {"k": 25,  "keep": 0.95},
     "energy":  {"k": 30,  "keep": 0.90},
     "concrete":{"k": 35,  "keep": 0.90},
-    "wine":    {"k": 40,  "keep": 0.85},
-    "kin8nm":  {"k": 100, "keep": 0.85},
-    "power":   {"k": 100, "keep": 0.85},
-    "naval":   {"k": 100, "keep": 0.85},
-    "protein": {"k": 100, "keep": 0.80},
+    "wine":    {"k": 40,  "keep": 0.80},
+    "kin8nm":  {"k": 100, "keep": 0.80},
+    "power":   {"k": 100, "keep": 0.80},
+    "naval":   {"k": 100, "keep": 0.80},
+    "protein": {"k": 100, "keep": 0.70},
 }
 
 # ===== 把 third_party/LUNAR 加進 import path =====
