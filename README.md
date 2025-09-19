@@ -14,7 +14,7 @@ GRAFT 目標：**在不手動前處理/修剪資料**的前提下，
 **組裝成單一可重現的流水線**，
 並提供**隨機刪減**等對照組以做消融實驗，最後以統一指標與流程評估。
 
-* 任務涵蓋：**特徵補全（Imputation）**與**標籤預測（Label Prediction）**。
+* 任務涵蓋：**標籤預測（Label Prediction）**。
 * 設計原則：以 **模組化 Adapter/Selector/Builder** 連接三篇方法，避免侵入式改寫上游實作。
 * 實驗方式：固定資料/切分，跑多個 random seeds，彙整 mean±std。
 
@@ -88,8 +88,6 @@ GRAFT 目標：**在不手動前處理/修剪資料**的前提下，
 ## 📊 評估與報告（Evaluation & Reporting）
 
 * **主指標（Imputation）**：`MAE`（越低越好）。
-* **輔指標**：`RMSE` / `MSE`（可選）。
-* **標籤預測**：回歸→`MAE`/`RMSE`；分類→`Accuracy`/`AUROC`。
 * **重複實驗**：**5 seeds**（建議：`[0,1,2,3,4]`），報告 `mean ± std`。
 * **匯整腳本**：`tools/export_results.py` 讀取 `result.pkl/csv`，匯出到 `results/tables/summary.csv`。
 

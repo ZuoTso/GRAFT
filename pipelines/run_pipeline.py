@@ -49,6 +49,8 @@ try:
 except Exception:
     np = None
 
+from pipelines.pack_support import build_grape_cmd, make_random_mask
+
 # =========================
 # Tool
 # =========================
@@ -392,6 +394,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--prep_only", action="store_true", help="Only build baseline intermediates and exit (no final GRAPE training)")
     p.add_argument("--force_prep", action="store_true", help="Rebuild baseline intermediates even if files already exist")
 
+    p.add_argument('--grape_domain', choices=['uci','pack'], default='uci', help='GRAPE data domain: uci or pack')
+    p.add_argument('--pack_root', type=str, default=None, help='baseline folder for pack domain (X_norm.npy/mask.npy/split_idx.json/y.npy)')
+    # Random 模組參數
+
     args, unknown = p.parse_known_args(argv)
 
     def harvest_prefix(prefix: str) -> Dict[str, Any]:
@@ -448,13 +454,16 @@ def run_grape_prep(args: argparse.Namespace, contract: Contract) -> None:
 
     print("[PREP] Baseline intermediates not found → export via GRAPE (prep-only)…")
     cli = [sys.executable, str(grape),
-           "--grape_root", args.grape_root,
-           "--dataset", args.dataset,
-           "--seed", str(args.seed),
-           "--artifact_dir", str(args.artifact_dir),
-           "--task", "both",
-           "--prep_only",
-           "--inject_artifact_flags"]
+            "--grape_root", args.grape_root,
+            "--dataset", args.dataset,
+            "--seed", str(args.seed),
+            "--artifact_dir", str(args.artifact_dir),
+            "--task", str(args._grape.get("task", "both")),
+            "--prep_only",
+            "--inject_artifact_flags",
+            "--grape_domain", args.grape_domain]     # ← New
+    if args.grape_domain == "pack" and args.pack_root:
+        cli += ["--pack_root", args.pack_root]    # ← 若是 pack，要把 root 也帶過去
 
     # 嚴格 manifest + PREP_ONLY
     env = os.environ.copy()
@@ -556,6 +565,13 @@ def call_grape(args: argparse.Namespace, contract: Contract, manifest_p: Path) -
     extra_cli: List[str] = []
     for k, v in sorted(args._grape.items()):
         extra_cli += to_cli(k, v)
+    
+    # ★ 新增：若沒帶 grape_domain/pack_root，就用頂層的
+    if "grape_domain" not in args._grape:
+        extra_cli += ["--grape_domain", args.grape_domain]
+    use_domain = args._grape.get("grape_domain", args.grape_domain)
+    if use_domain == "pack" and "pack_root" not in args._grape:
+        extra_cli += ["--pack_root", args.pack_root]
 
     cli = base_cli + extra_cli
 
@@ -580,10 +596,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Baseline 檢查/準備
     need_prep = (
-        args.force_prep or
-        not (
+        args.force_prep or not (
             contract.p_X().exists() and contract.p_mask().exists() and
-            contract.p_edges().exists() and contract.p_split_any().exists()
+            contract.p_split_any().exists()
         )
     )
     if need_prep:

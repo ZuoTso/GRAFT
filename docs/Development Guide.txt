@@ -17,15 +17,15 @@
         - 後續可以往交叉驗證發展
     - DEFAULTS = 
         {
-            "yacht":   {"k": 20,  "keep": 0.95},✔️
-            "housing": {"k": 25,  "keep": 0.95},✔️
-            "energy":  {"k": 30,  "keep": 0.90},✔️
-            "concrete":{"k": 35,  "keep": 0.90},✔️
-            "wine":    {"k": 40,  "keep": 0.85},✖️
-            "kin8nm":  {"k": 100, "keep": 0.85},❔
-            "power":   {"k": 100, "keep": 0.85},❔
-            "naval":   {"k": 100, "keep": 0.85},✖️
-            "protein": {"k": 100, "keep": 0.80},❔
+            "yacht":   {"k": 20,  "keep": 0.95},✅✔️
+            "housing": {"k": 25,  "keep": 0.95},✅✔️
+            "energy":  {"k": 30,  "keep": 0.90},✅✔️
+            "concrete":{"k": 35,  "keep": 0.90},✅
+            "wine":    {"k": 40,  "keep": 0.80},✅✔️
+            "kin8nm":  {"k": 100, "keep": 0.80},✅
+            "power":   {"k": 100, "keep": 0.80},✅
+            "naval":   {"k": 100, "keep": 0.80},✅
+            "protein": {"k": 100, "keep": 0.70},✅
         }
     - shapes
         - concrete：1030 × 8。
@@ -55,11 +55,16 @@
 
 ---
 
+四種方法
 ✅1. LUNAR+GRAPE
 ✅2. T2G+GRAPE
 ✅3. LUNAR+T2G+GRAPE
 ✅4. T2G+LUNAR+GRAPE
-✅5. Ramdom+GRAPE
+四種 baseline
+✅a. Ramdom drop ALL+GRAPE
+✅b. Ramdom drop row+GRAPE
+✅c. Ramdom drop col+GRAPE
+✅d. GRAPE
 
 評分指標 
     GRAPE論文中的評分指標imputation MAE
@@ -69,3 +74,16 @@
     上述的4種+GRAPE的組合
 未來發展    
     LUNAR 保留比例
+
+
+✅猜測：feature 太少 T2G 的效果不好
+    我在嘗試更多的feature的時候出現的問題：
+        當sample與feature多的時候，edge(n*d)數量遽增，需要的記憶體大小增加。
+        使用 T2G 的 year 但 row 只取 40000：跑8小時20分
+            使用相同的設定在 grape 以及 t2g_grape 測試猜想
+    GRAPE 中的 mc 屬於 純feature imputation 沒有 label prediction
+    以驗證有此趨勢
+四種方法+四種baseline都完成
+    dataset任選用原GRAPE(UCI)以及原T2G(sample有縮減，圖大大)
+    方法LUNAR+GRAPE最好LUNAR+T2G 後GRAPE的兩總組合次之
+    T2G的效益不大，因為UCI的特徵數少，如上述以驗證的猜測

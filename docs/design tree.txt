@@ -23,19 +23,11 @@ GRAFT/
 │  │  └─ random_clustermerge.yaml
 │  └─ search/                        # 參數掃描空間（k_edge, k_feat, p, q…）
 │
-├─ data/
-│  ├─ raw/                           # 原始 CSV/NPY
-│  ├─ processed/                     # 僅做標準化/編碼（不做修剪）
-│  └─ masks/                         # 固定缺失遮罩（同一遮罩跑所有變體）
-│
 ├─ third_party/                      # 以 git submodule 引入原倉庫（不直接改）
 │  ├─ GRAPE/                         # github.com/maxiaoba/GRAPE
 │  ├─ LUNAR/                         # github.com/agoodge/LUNAR
 │  └─ T2G-FORMER/                    # github.com/jyansir/t2g-former
 │
-├─ patches/                          # 若必要，對第三方的最小差異補丁（可空）
-│  ├─ grape_patches.diff
-│  └─ t2g_patches.diff
 │
 ├─ src/
 │  ├─ __init__.py

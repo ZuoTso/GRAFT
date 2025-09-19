@@ -70,6 +70,67 @@ try:
 except Exception:
     joblib = None
 
+# 放在檔案 import 後面
+from pathlib import Path
+import json, shutil, numpy as np, re
+
+def sanitize_pack_root(pack_root: str) -> str:
+    root = Path(pack_root)
+    Xp = root / "X_norm.npy"
+    Mp = root / "mask.npy"
+    Sp = root / "split_idx.json"
+    Yp = root / "y.npy"
+    for p in [Xp, Mp, Sp, Yp]:
+        if not p.exists():
+            raise FileNotFoundError(f"[pack sanitize] 找不到必要檔案：{p}")
+
+    M = np.load(Mp, mmap_mode="r")
+    row_keep = (M.sum(axis=1) > 0)
+    with Sp.open("r", encoding="utf-8") as f:
+        split = json.load(f)
+
+    def _filt(lst):
+        arr = np.asarray(lst, dtype=np.int64)
+        return arr[row_keep[arr]].tolist() if arr.size else []
+
+    split2 = {
+        "train": _filt(split.get("train", [])),
+        "val":   _filt(split.get("val",   [])),
+        "test":  _filt(split.get("test",  [])),
+    }
+    if len(split2["test"]) == 0:
+        raise RuntimeError("[pack sanitize] 過濾後 test 為空，cap 太兇或 mask 太 sparse。")
+
+    new_root = root.parent / f"{root.name}_rowsafe"
+    new_root.mkdir(parents=True, exist_ok=True)
+
+    # 複用大檔，只複製或硬連結
+    for fn in ["X_norm.npy","mask.npy","y.npy","feature_names.json","scaler.pkl","bipartite_edges.npz","omega_test_idx.npz"]:
+        src = root / fn
+        if src.exists():
+            dst = new_root / fn
+            if not dst.exists():
+                try:
+                    os.link(src, dst)  # 硬連結省空間（若檔系統不支援會丟例外）
+                except Exception:
+                    shutil.copyfile(src, dst)
+
+    with (new_root / "split_idx.json").open("w", encoding="utf-8") as f:
+        json.dump(split2, f, ensure_ascii=False)
+
+    print(f"[pack sanitize] rows_keep={int(row_keep.sum())} / {M.shape[0]}  → split 已對齊")
+    return str(new_root)
+
+def patch_root_in_cmd(cmd: str, new_root: str) -> str:
+    if not cmd:
+        return cmd
+    tokens = re.split(r"(\s+)", cmd)  # 保留空白分隔
+    for i, tok in enumerate(tokens):
+        if tok == "--root" and i+2 <= len(tokens):
+            tokens[i+2] = new_root
+            break
+    return "".join(tokens)
+
 # ----------------------------- utils -----------------------------
 
 def now_str():
@@ -121,8 +182,14 @@ def run_cmd(cmd, cwd=None, env=None):
     return t0
 
 def _glob_result_pkls(grape_root: Path, dataset: str):
-    pat = str(grape_root / "uci" / "test" / dataset / "**" / "result.pkl")
-    return sorted(glob.glob(pat, recursive=True), key=os.path.getmtime)
+    pats = [
+        grape_root / "uci"  / "test" / dataset / "**" / "result.pkl",
+        grape_root / "pack" / "test" / dataset / "**" / "result.pkl",
+    ]
+    cands = []
+    for p in pats:
+        cands += glob.glob(str(p), recursive=True)
+    return sorted(cands, key=os.path.getmtime)
 
 
 def find_latest_result_after(grape_root: Path, dataset: str, t_after: float):
@@ -248,6 +315,7 @@ def ensure_prep_baseline(save_root: Path) -> None:
       - omega_test_idx.npz
     """
     needed = ["X_norm.npy", "mask.npy", "split_idx.json", "omega_test_idx.npz"]
+    
     missing = [n for n in needed if not (save_root / n).exists()]
     if missing:
         raise FileNotFoundError(f"[prep_only] baseline 中介物未齊全：缺 {', '.join(missing)}（root={save_root}）")
@@ -263,7 +331,9 @@ def ensure_prep_stage(save_root: Path, tag: str) -> None:
         # 若你想更嚴格，可解除下一行註解
         # needed += ["bipartite_edges.npz"]
     elif tag == "label":
-        needed = ["split_idx.json", "omega_test_idx.npz"]
+        needed = ["split_idx.json"]
+        # 若你想更嚴格，可解除下一行註解
+        # needed += ["bipartite_edges.npz"]
     else:
         raise ValueError(f"unknown tag: {tag}")
 
@@ -325,12 +395,27 @@ def main():
     )
     ap.add_argument("--prep_only", action="store_true",
                     help="Export baseline intermediates only (no training). Will set GRAPT_PREP_ONLY=1 and pass --prep_only to train_*.")
+    
+    ap.add_argument("--grape_domain", choices=["uci","pack"], default="uci",
+                help="GRAPE data domain: uci or pack")
+    ap.add_argument("--pack_root", type=str, default=None,
+                    help="baseline folder for pack domain (X_norm.npy/mask.npy/split_idx.json/y.npy)")
 
     args = ap.parse_args()
 
     grape_root = Path(args.grape_root).resolve()
     if not grape_root.exists():
         raise FileNotFoundError(f"GRAPE 根目錄不存在：{grape_root}")
+
+    # 若是 pack domain，先把 split 清成「只包含仍有觀測特徵的列」
+    orig_pack_root = args.pack_root
+    # 若使用者有自己傳 y_cmd/mdi_cmd，將 --root 改成 rowsafe
+    if args.grape_domain == "pack" and orig_pack_root:
+        if args.mdi_cmd:
+            args.mdi_cmd = patch_root_in_cmd(args.mdi_cmd, args.pack_root)
+        if args.y_cmd:
+            args.y_cmd = patch_root_in_cmd(args.y_cmd, args.pack_root)
+
 
     save_root = Path(args.artifact_dir) / "baseline" / args.dataset / f"seed{args.seed}"
     impute_dir = save_root / "impute"
@@ -339,9 +424,20 @@ def main():
 
     # Compose defaults if missing
     def _default_mdi():
-        return f"python {grape_root}/train_mdi.py --seed {args.seed} uci --data {args.dataset}"
+        if args.grape_domain == "uci":
+            return f"python {grape_root}/train_mdi.py --seed {args.seed} uci --data {args.dataset}"
+        else:  # pack
+            if not args.pack_root:
+                raise ValueError("pack domain requires --pack_root")
+            return f"python {grape_root}/train_mdi.py --seed {args.seed} pack --root {args.pack_root} --data {args.dataset}"
     def _default_y():
-        return f"python {grape_root}/train_y.py --seed {args.seed} uci --data {args.dataset}"
+        if args.grape_domain == "uci":
+            return f"python {grape_root}/train_y.py --seed {args.seed} uci --data {args.dataset}"
+        else:  # pack
+            if not args.pack_root:
+                raise ValueError("pack domain requires --pack_root")
+            return f"python {grape_root}/train_y.py --seed {args.seed} pack --root {args.pack_root} --data {args.dataset}"
+
 
     mdi_cmd = args.mdi_cmd or _default_mdi()
     y_cmd   = args.y_cmd   or _default_y()
@@ -355,7 +451,7 @@ def main():
                 return cmd
             flags = ["--artifact_dir", art_dir, "--dump_intermediate"]
             tokens = shlex.split(cmd)
-            domains = {"uci", "mimic", "physionet", "eicu"}
+            domains = {"uci", "mimic", "physionet", "eicu", "pack"}
             insert_at = None
             for i, tok in enumerate(tokens):
                 if tok in domains:
@@ -374,7 +470,7 @@ def main():
             cmd 是一條字串命令；回傳新字串命令。
             """
             tokens = shlex.split(cmd)
-            domains = {"uci", "mimic", "physionet", "eicu"}
+            domains = {"uci", "mimic", "physionet", "eicu", "pack"}
             insert_at = None
             for i, tok in enumerate(tokens):
                 if tok in domains:
