@@ -1,3 +1,8 @@
+Just an idea
+Just an idea
+Just an idea
+Just an idea
+
 GRAFT/
 ├─ README.md
 ├─ LICENSE

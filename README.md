@@ -1,178 +1,100 @@
-# GRAFT: **G**RAPE **R**educers **A**dapters for **F**ormer/**T**opology (整合 GRAPE・LUNAR・T2G-FORMER)
+# GRAFT：Graph-Aided Feature/Row Trimming Orchestrator for GRAPE / LUNAR / T2G-Former
+
+> **TL;DR**：這個專案提供一個「單一入口的 Pipeline Orchestrator」，把 **T2G‑Former**（以 FR‑Graph 權重做「軟式特徵刪除」）、**LUNAR**（行/列遮罩產生器）與 **隨機遮罩** 組裝起來，最後以 **GRAPE** 跑兩個任務：**MDI（特徵插補）** 與 **Y（標籤預測）**。整條流程以嚴格的 **overlay manifest**（`GRAFT_OVERLAY_MANIFEST`）控管遮罩如何疊合（`AND` 或 `OR`），確保不洩漏測試資料，並把所有中介物規範化到 `artifact_dir` 之下。
 
 ---
 
-## 🌱 專案簡述（Overview）
+## 目錄
 
-GRAFT 目標：**在不手動前處理/修剪資料**的前提下，
-把三篇代表作 
+* [特色](#特色)
+* [安裝需求](#安裝需求)
+* [檔案與目錄結構](#檔案與目錄結構)
+* [快速開始](#快速開始)
 
-- **GRAPE**（缺失值補全/標籤學習的二分圖 GNN）
-- **LUNAR**（以 GNN 統一在地離群偵測）
-- **T2G-FORMER**（把表格特徵重組成關係圖，促進異質特徵互動）
+  * [A) 只匯出 GRAPE Baseline 中介物（prep-only）](#a-只匯出-grape-baseline-中介物prep-only)
+  * [B) 完整串接：T2G →（可選 LUNAR）→ GRAPE](#b-完整串接t2g-可選-lunar-grape)
+  * [C) 已有 T2G 權重時的最短流程](#c-已有-t2g-權重時的最短流程)
+  * [D) PACK Domain（自備 baseline 目錄）](#d-pack-domain自備-baseline-目錄)
+* [關鍵參數與環境變數](#關鍵參數與環境變數)
 
-**組裝成單一可重現的流水線**，
-並提供**隨機刪減**等對照組以做消融實驗，最後以統一指標與流程評估。
-
-* 任務涵蓋：**標籤預測（Label Prediction）**。
-* 設計原則：以 **模組化 Adapter/Selector/Builder** 連接三篇方法，避免侵入式改寫上游實作。
-* 實驗方式：固定資料/切分，跑多個 random seeds，彙整 mean±std。
-
----
-
-## 🧭 開發里程碑（Roadmap）
-
-> 依你既有的「GRAFT-開發指南」建議順序撰寫，做完就把核取方塊勾起來。
-
-1. [ ] **打通 `pipelines/run_baseline_grape.py`（不刪減）**
-   產出：GRAPE 原始結果（Imputation & Label）。
-2. [ ] **接上 `t2g_adapter → t2g_feature_selector + bipartite_builder`**
-   產出：將 T2G-FORMER 的 FR-Graph/選特徵 轉為 GRAPE 可用的二分圖（特徵↔觀測）。
-3. [ ] **接上 `lunar_adapter → lunar_row_selector（硬刪/軟權雙模式）`**
-   產出：在觀測維度做列選擇/權重化，以模擬 LUNAR 對正常樣本區域的偏好。
-4. [ ] **整合為 `pipelines/run_combo.py`**（可切換：僅 GRAPE / +T2G / +LUNAR / All）。
-5. [ ] **加入三個 `random_*` 對照**
-
-   * `random_feature_drop`（隨機丟特徵）
-   * `random_row_drop`（隨機丟樣本）
-   * `random_graph_edges`（隨機建邊/權重）
-6. [ ] **視需要加入 `em_loops.py` 1–3 輪**
-   在補全↔訓練之間做 EM 式迭代：E（補全）→ M（訓練）。
-
-> ✅ 完成標記與關聯 PR：
-
-* Baseline：
-* T2G Adapter：
-* LUNAR Adapter：
-* Combo：
+  * [run\_pipeline.py（主 orchestrator）](#run_pipelinepy主-orchestrator)
+  * [T2G Adapter（軟刪欄）](#t2g-adapter軟刪欄)
+  * [LUNAR Adapter（列/欄遮罩）](#lunar-adapter列欄遮罩)
+  * [Baseline Runner（GRAPE 收斂／蒐集）](#baseline-runnergrape-收斂蒐集)
+* [Artifact 版面（輸出規格）](#artifact-版面輸出規格)
+* [常見問題（FAQ / Debug）](#常見問題faq--debug)
+* [研究建議與消融測試備註](#研究建議與消融測試備註)
+* [授權與鳴謝](#授權與鳴謝)
 
 ---
 
-## 📦 環境與需求（Requirements & Environment）
+## 特色
 
-> 建議同時支援 **Colab** 與 **本機/伺服器（conda）**。
+* **單一入口**：`pipelines/run_pipeline.py` 指定 `--modules` 與 `--order`，自動建立一次性 **variants** 工作區，跑完各 stage 並呼叫 GRAPE。
+* **嚴格 manifest**：以 `overlay_manifest.json` 明確列出要疊合的遮罩、順序與運算（`AND` / `OR`），再由 GRAPE 訓練腳本讀取環境變數 `GRAFT_OVERLAY_MANIFEST` 實際套用，避免吃到舊檔。
+* **安全與可重現**：
 
-**建議版本（可在 Colab 實測後填）：**
+  * Baseline 中介物（`X_norm.npy`、`mask.npy`、`split_idx.json`、…）缺時可 `--auto_prep` 自動從 GRAPE 匯出。
+  * 每次執行生成 **run\_token** 對應的 `variants/<token>/`，不互相覆蓋。
+* **多資料域**：支援 **UCI domain**（GRAPE 內建）與 **PACK domain**（自備 baseline 目錄：`X_norm.npy / y.npy / mask.npy / split_idx.json`）。
+* **雙任務**：
 
-* Python：`TODO（例如 3.10.x）`
-* PyTorch / CUDA：`TODO`
-* PyTorch Geometric：`TODO`
-* pandas / numpy / scikit-learn：`TODO`
-* fancyimpute / cvxpy（若需要）：`TODO`
-
-### A. Colab 一鍵安裝
-
-### B. 本機（conda）
+  * **MDI（插補）**：輸出 `impute/metrics.json`（RMSE/MAE）與邊級預測。
+  * **Y（標籤）**：輸出 `label/metrics.json`（RMSE/MAE）與測試集預測。
 
 ---
 
-## 🗂️ 專案結構（Repo Structure）
+## 安裝需求
 
-- T2G-LUNAR / LUNAR-T2G
-- GRAPE結尾，保留端到端特性
+* Python ≥ 3.10
+* PyTorch（依 GPU/環境安裝對應版本）
+* NumPy、pandas、joblib 等常用套件
+* 一個可用的 **GRAPE** 專案目錄（含 `train_mdi.py`、`train_y.py`）
+* 選配：**T2G‑Former** 專案（用於匯出 FR‑Graph 權重）
 
-## 🚀 快速開始（Quickstart）
-
-### 1) 下載資料（UCI）與切分
-
-### 2) 跑 GRAPE Baseline
-
-### 3) 加入 T2G-FORMER 元件（特徵圖/選特徵）
-
-### 4) 加入 LUNAR 元件（列選擇/軟權）
-
-### 5) 全部整合 + 隨機對照
+> **建議**：在虛擬環境或 Colab 建立乾淨環境，並設定 `artifact_dir=/content/grapt_artifacts`（可自由更改）。
 
 ---
 
-## 📊 評估與報告（Evaluation & Reporting）
+## 檔案與目錄結構
 
-* **主指標（Imputation）**：`MAE`（越低越好）。
-* **重複實驗**：**5 seeds**（建議：`[0,1,2,3,4]`），報告 `mean ± std`。
-* **匯整腳本**：`tools/export_results.py` 讀取 `result.pkl/csv`，匯出到 `results/tables/summary.csv`。
-
-結果表格欄位建議：
+專案核心檔案（節錄）：
 
 ```
-dataset, task, missing_rate, method, use_t2g, use_lunar, random_ctrl, seed, MAE, RMSE, time_sec
+./pipelines/
+  run_pipeline.py               # 主 orchestrator（variants + overlay manifest 嚴格模式）
+  run_baseline_grape.py         # 呼叫/蒐集 GRAPE（或只匯出中介物）
+  t2g_export_from_grape.py      # 以 GRAPE baseline 當資料來源，forward-hook 匯出 T2G FR-Graph 權重
+  t2g_adapter.py                # 讀取 FR-Graph 權重 → 合成列×欄遮罩 mask_t2g.npy（軟刪欄）
+  lunar_adapter.py              # 呼叫/包裝 LUNAR，輸出 mask_lunar.npy（可選 edge_keep）
+  pack_subparser.py / pack_data.py  # PACK domain 支援（自備 baseline）
+
+third_party/
+  GRAPE/  LUNAR/  T2GFormer/    # 建議以子模組或路徑指向（可依使用者目錄調整）
+
+<artifact_dir>/
+  baseline/<dataset>/seed<k>/   # 所有中介與結果統一放這裡（見下節）
 ```
 
 ---
 
-## ⚙️ 重要介面（Adapters / Selectors / Builders）
+## 快速開始
 
-### T2G Adapter（特徵層）
+參考`GRAFT_my_operations.ipynb`
 
-* 輸入：原始表格 `X ∈ R^{N×D}`。
-* 產出：FR-Graph（例如 cosine/top-k），`t2g_feature_selector` 回傳被選特徵子集 `D'`。
-* `bipartite_builder`：建立 GRAPE 需要的二分圖（觀測↔特徵）。
+### A) 只匯出 GRAPE Baseline 中介物（prep-only）
 
-### LUNAR Adapter（觀測層）
-
-* `lunar_row_selector`：
-
-  * **硬刪（hard-delete）**：過濾掉低信度/低密度樣本。
-  * **軟權（soft-weight）**：保留所有樣本，但以樣本權重參與損失。
-
-### Randomizers（消融對照）
-
-* `random_feature_drop` / `random_row_drop` / `random_graph_edges`：可調比例/機率。
+> 當 `X_norm.npy / mask.npy / split_idx.json` 尚未就緒時，可先做一次 **prep**。
 
 ---
 
-## 🧪 實驗設定（Examples）
+### B) 完整串接：T2G →（可選 LUNAR）→ GRAPE
 
-> 建議把你在 Colab 的實際指令貼到這裡，確保他人能重現。
-
----
-
-## 🧷 Reproducibility（可重現性）
-
-* 固定 random seed：`--seeds 5`（內部使用 `torch`, `numpy`, `random` 同步設置）。
-* 記錄環境：把 `python -V`、`pip list`、`nvidia-smi` 另存到 `results/logs/env_*.txt`。
-* 日誌/儀表板：建議接 `wandb`（專案名：`graft`）。
+* 若要加入 **LUNAR**：把 `--modules` 與 `--order` 改成 `t2gexp,t2g,lunar,grape` 與 `t2g>lunar>grape`，並追加 LUNAR 參數（如 `--lunar.keep_ratio 0.9`）。
+* `--mask_op AND|OR` 控制 baseline 與各遮罩的疊合方式。
 
 ---
 
-## 📑 Citation（引用）
+### C) 已有 T2G 權重時的最短流程
 
-> 請把 BibTeX 放在這裡（GRAPE / LUNAR / T2G-FORMER）。
-
-* GRAPE: *Handling Missing Data with Graph Representation Learning*（年/會議/網址）
-* LUNAR: *Unifying Local Outlier Detection Methods via Graph Neural Networks*（年/會議/網址）
-* T2G-FORMER: *Organizing Tabular Features into Relation Graphs ...*（年/會議/網址）
-
----
-
-## 🤝 Contributing（貢獻）
-
-1. Fork & PR，請附：
-
-   * 影響範圍（pipelines/adapters/...）
-   * 實驗結果（至少 1 組 dataset × seed≥3）
-2. 風格：`black` / `ruff`，型別註解 `typing` 可選。
-
----
-
-## 📜 License
-
-* License：`TODO（MIT/Apache-2.0/...）`
-
----
-
-## 🗓️ Changelog（請每次更新補上）
-
-* 2025-08-18：初始化 README 草稿。
-
----
-
-## ✅ 待辦清單（Checklist）
-
-* [ ] 在 Colab 成功跑完 GRAPE baseline 並記錄環境版本
-* [ ] 完成 T2G Adapter（含選特徵）+ 單元測試
-* [ ] 完成 LUNAR Row Selector（硬刪/軟權）+ 單元測試
-* [ ] `run_combo.py` 串接成功（四種模式可切換）
-* [ ] 三個 randomizers 加入並在表格中呈現消融
-* [ ] 匯表腳本 `export_results.py` 產出 `summary.csv`
-* [ ] 撰寫 `DEVLOG.md`、`EXPERIMENTS.md` 並鏈到 README
-* [ ] 補上 Citation 與 License
+如果你已手上有 `W_layer*.npy`（同一維度的方陣，建議對稱化），可直接跳過
